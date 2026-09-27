@@ -1,0 +1,7 @@
+
+# C++ build files
+**/build/
+*.exe
+*.o
+*.obj
+.vscode/
