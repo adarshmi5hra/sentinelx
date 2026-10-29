@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
+    Float,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -37,6 +38,16 @@ class Service(Base):
     )
 
     incidents: Mapped[list["Incident"]] = relationship(
+        back_populates="service",
+        passive_deletes=True,
+    )
+
+    metrics: Mapped[list["Metric"]] = relationship(
+        back_populates="service",
+        passive_deletes=True,
+    )
+
+    anomalies: Mapped[list["Anomaly"]] = relationship(
         back_populates="service",
         passive_deletes=True,
     )
@@ -115,3 +126,66 @@ class IncidentEvent(Base):
     )
 
     incident: Mapped["Incident"] = relationship(back_populates="events")
+
+
+class Metric(Base):
+    __tablename__ = "metrics"
+    __table_args__ = (
+        Index("ix_metrics_service_timestamp", "service_id", "timestamp"),
+        Index(
+            "ix_metrics_service_metric_timestamp",
+            "service_id",
+            "metric",
+            "timestamp",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    metric: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    service: Mapped["Service"] = relationship(back_populates="metrics")
+
+
+class Anomaly(Base):
+    __tablename__ = "anomalies"
+    __table_args__ = (
+        CheckConstraint(
+            "severity IN ('low', 'medium', 'high', 'critical')",
+            name="ck_anomalies_severity",
+        ),
+        Index("ix_anomalies_service_timestamp", "service_id", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    metric: Mapped[str] = mapped_column(String(100), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    service: Mapped["Service"] = relationship(back_populates="anomalies")
