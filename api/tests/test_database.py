@@ -1,14 +1,20 @@
 from uuid import uuid4
 
+from datetime import timedelta
+from api.app.models import utc_now
+
 from sqlalchemy import select
 
 from api.app.database import SessionLocal, engine, get_db
 from api.app.models import (
-    Anomaly,
+    Service,
     Incident,
     IncidentEvent,
     Metric,
-    Service,
+    Anomaly,
+    Prediction,
+    RemediationAction,
+    AuditLog,
 )
 
 
@@ -209,6 +215,147 @@ def test_anomaly_can_be_persisted() -> None:
             if service.id is not None:
                 # The database cascades deletion to the anomaly.
                 db.delete(service)
+                db.commit()
+        finally:
+            db.close()
+
+
+def test_prediction_can_be_persisted() -> None:
+    db = SessionLocal()
+    service = Service(
+        name=f"test-prediction-{uuid4().hex}",
+        namespace="default",
+    )
+
+    try:
+        db.add(service)
+        db.commit()
+        db.refresh(service)
+
+        prediction = Prediction(
+            service_id=service.id,
+            metric="cpu_usage",
+            predicted_value=92.5,
+            target_timestamp=utc_now() + timedelta(minutes=10),
+            horizon_seconds=600,
+            confidence_score=0.95,
+            model_name="isolation-forest",
+            details={"threshold": 90},
+        )
+
+        db.add(prediction)
+        db.commit()
+        db.refresh(prediction)
+
+        saved = db.get(Prediction, prediction.id)
+
+        assert saved is not None
+        assert saved.metric == "cpu_usage"
+        assert saved.predicted_value == 92.5
+        assert saved.confidence_score == 0.95
+        assert saved.details["threshold"] == 90
+
+    finally:
+        try:
+            db.rollback()
+            if service.id is not None:
+                db.delete(service)
+                db.commit()
+        finally:
+            db.close()
+
+
+def test_remediation_action_can_be_persisted() -> None:
+    db = SessionLocal()
+    service = Service(
+        name=f"test-remediation-{uuid4().hex}",
+        namespace="default",
+    )
+
+    try:
+        db.add(service)
+        db.commit()
+        db.refresh(service)
+
+        incident = Incident(
+            service_id=service.id,
+            severity="high",
+            probable_cause="High CPU utilization",
+        )
+        db.add(incident)
+        db.commit()
+        db.refresh(incident)
+
+        action = RemediationAction(
+            incident_id=incident.id,
+            action_type="scale",
+            description="Scale deployment to three replicas",
+            parameters={"replicas": 3},
+        )
+
+        db.add(action)
+        db.commit()
+        db.refresh(action)
+
+        saved = db.get(RemediationAction, action.id)
+
+        assert saved is not None
+        assert saved.status == "suggested"
+        assert saved.action_type == "scale"
+        assert saved.parameters["replicas"] == 3
+
+    finally:
+        try:
+            db.rollback()
+
+            if service.id is not None:
+                incidents = db.scalars(
+                    select(Incident).where(Incident.service_id == service.id)
+                ).all()
+
+                for incident in incidents:
+                    db.delete(incident)
+
+                db.commit()
+
+                db.delete(service)
+                db.commit()
+
+        finally:
+            db.close()
+
+
+def test_audit_log_can_be_persisted() -> None:
+    db = SessionLocal()
+    audit_log = AuditLog(
+        actor="system",
+        action="incident.created",
+        entity_type="incident",
+        entity_id=123,
+        details={
+            "severity": "critical",
+            "source": "anomaly_detector",
+        },
+    )
+
+    try:
+        db.add(audit_log)
+        db.commit()
+        db.refresh(audit_log)
+
+        saved = db.get(AuditLog, audit_log.id)
+
+        assert saved is not None
+        assert saved.actor == "system"
+        assert saved.action == "incident.created"
+        assert saved.entity_type == "incident"
+        assert saved.details["severity"] == "critical"
+
+    finally:
+        try:
+            db.rollback()
+            if audit_log.id is not None:
+                db.delete(audit_log)
                 db.commit()
         finally:
             db.close()
